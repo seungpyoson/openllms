@@ -17,8 +17,26 @@ import (
 	"github.com/google/uuid"
 )
 
+type proactiveReadKey struct{}
+
+type observedCredentialReads struct {
+	secrets.Client
+	proactiveRead chan struct{}
+	once          sync.Once
+}
+
+func (s *observedCredentialReads) Get(ctx context.Context, path, name string) (string, error) {
+	raw, err := s.Client.Get(ctx, path, name)
+	if ctx.Value(proactiveReadKey{}) == true {
+		s.once.Do(func() { close(s.proactiveRead) })
+	}
+	return raw, err
+}
+
 func TestOAuthRefreshSharedAcrossConsumers(t *testing.T) {
 	f := newAccountFixture(t)
+	sec := &observedCredentialReads{Client: f.vault, proactiveRead: make(chan struct{})}
+	f.srv = New(f.st, config.Config{}, sec)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	oldRequests := make(chan struct{}, 2)
@@ -83,7 +101,8 @@ func TestOAuthRefreshSharedAcrossConsumers(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		updated, failed, _ := f.srv.proxy.RefreshExpiringOAuth(ctx, []store.Account{*acc}, time.Hour)
+		proactiveCtx := context.WithValue(ctx, proactiveReadKey{}, true)
+		updated, failed, _ := f.srv.proxy.RefreshExpiringOAuth(proactiveCtx, []store.Account{*acc}, time.Hour)
 		if updated != 1 || failed != 0 {
 			t.Error("proactive refresh failed")
 		}
@@ -94,6 +113,11 @@ func TestOAuthRefreshSharedAcrossConsumers(t *testing.T) {
 		case <-ctx.Done():
 			t.Error("consumers did not both reach the expired credential")
 		}
+	}
+	select {
+	case <-sec.proactiveRead:
+	case <-ctx.Done():
+		t.Error("proactive refresh did not read the expired credential")
 	}
 	unblock()
 	wg.Wait()

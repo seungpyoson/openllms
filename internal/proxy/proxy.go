@@ -562,12 +562,13 @@ func (e *Engine) callResponsesImages(ctx context.Context, acc *store.Account, bo
 		}
 		if res.StatusCode == http.StatusUnauthorized && strings.EqualFold(acc.AuthType, "oauth") && strings.TrimSpace(cred.RefreshToken) != "" {
 			newCred, rerr := e.RefreshOAuthCredential(ctx, acc, cred)
-			if rerr == nil {
-				cred, token = newCred, newCred.BearerToken()
-				res, err = e.execCodexImagesOnce(ctx, acc, respBody, url, cred, token, model, start)
-				if err != nil || res == nil {
-					return res, err
-				}
+			if rerr != nil {
+				return oauthRefreshFailure(acc, model, start, rerr), nil
+			}
+			cred, token = newCred, newCred.BearerToken()
+			res, err = e.execCodexImagesOnce(ctx, acc, respBody, url, cred, token, model, start)
+			if err != nil || res == nil {
+				return res, err
 			}
 		}
 		if res.StatusCode >= 300 {
@@ -754,7 +755,7 @@ func (e *Engine) doUpstreamOnce(ctx context.Context, acc *store.Account, body []
 	}
 	newCred, rerr := e.RefreshOAuthCredential(ctx, acc, cred)
 	if rerr != nil {
-		return &Result{StatusCode: http.StatusBadGateway, Error: "oauth_refresh_failed", AccountID: acc.ID, Model: model, Latency: time.Since(start)}, nil
+		return oauthRefreshFailure(acc, model, start, rerr), nil
 	}
 	return e.execUpstream(ctx, acc, body, url, authHeader, bearerPrefix, openaiAuth, newCred, newCred.BearerToken(), model, stream, start, codexResponses, anthropicBridge)
 }

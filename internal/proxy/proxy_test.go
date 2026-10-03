@@ -39,7 +39,7 @@ func TestCallAccountViaMockUpstream(t *testing.T) {
 	defer up.Close()
 
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "deepseek", "default")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-up"}))
 
 	acc := &store.Account{
@@ -74,7 +74,7 @@ func TestStreamPassthrough(t *testing.T) {
 	defer up.Close()
 
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "deepseek", "default")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-up"}))
 	acc := &store.Account{ID: uuid.New(), InfisicalPath: path, BaseURL: up.URL + "/v1", Vendor: "deepseek"}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -187,8 +187,8 @@ func TestFallbackRouteChain(t *testing.T) {
 
 	sec := memory.New()
 	idP, idF := uuid.New(), uuid.New()
-	pathP := vendor.InfisicalPath(uuid.New().String(), "deepseek", "p")
-	pathF := vendor.InfisicalPath(uuid.New().String(), "deepseek", "f")
+	pathP := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathF := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathP, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-primary"}))
 	_ = sec.Put(context.Background(), pathF, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-fallback"}))
 
@@ -237,8 +237,8 @@ func TestDispatchFailoverRoundRobin(t *testing.T) {
 
 	sec := memory.New()
 	idA, idB := uuid.New(), uuid.New()
-	pathA := vendor.InfisicalPath(uuid.New().String(), "deepseek", "a")
-	pathB := vendor.InfisicalPath(uuid.New().String(), "deepseek", "b")
+	pathA := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathB := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathA, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-a"}))
 	_ = sec.Put(context.Background(), pathB, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-b"}))
 
@@ -285,8 +285,8 @@ func TestDispatchFailoverWeighted(t *testing.T) {
 
 	sec := memory.New()
 	idH, idL := uuid.New(), uuid.New()
-	pathH := vendor.InfisicalPath(uuid.New().String(), "deepseek", "h")
-	pathL := vendor.InfisicalPath(uuid.New().String(), "deepseek", "l")
+	pathH := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathL := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathH, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-heavy"}))
 	_ = sec.Put(context.Background(), pathL, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-light"}))
 
@@ -337,7 +337,7 @@ func TestClaudeOAuthUsesBearer(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "claude", "work")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "oauth-at"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "claude", AuthType: "oauth", InfisicalPath: path, BaseURL: up.URL}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -374,7 +374,7 @@ func TestCodexOAuthSetsAccountHeader(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "codex", "a")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "codex-at", ChatGPTAccountID: "acct-9"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "codex", AuthType: "oauth", InfisicalPath: path, BaseURL: up.URL}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -418,7 +418,7 @@ func TestImagesGenerationsViaMockUpstream(t *testing.T) {
 	defer up.Close()
 
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "openai", "imgs")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-up"}))
 	acc := &store.Account{
 		ID: uuid.New(), Vendor: "openai", AuthType: "api_key",
@@ -479,7 +479,7 @@ func TestImagesCodexOAuthViaResponses(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "codex", "img")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "codex-at", ChatGPTAccountID: "acct-9"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "codex", AuthType: "oauth", InfisicalPath: path, BaseURL: up.URL}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -506,7 +506,7 @@ func TestClaudeChatCompletionsBridgeToMessages(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "claude", "work")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-ant-test"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "claude", AuthType: "api_key", InfisicalPath: path, BaseURL: up.URL}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -544,7 +544,7 @@ func TestOpenAIAPIKeyToolsRoutesToResponses(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "openai", "work")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-up"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "openai", AuthType: "api_key", InfisicalPath: path, BaseURL: up.URL + "/v1"}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -580,7 +580,7 @@ func TestOpenAIAPIKeyNoToolsPassthroughChatCompletions(t *testing.T) {
 	}))
 	defer up.Close()
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "openai", "plain")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-up"}))
 	acc := &store.Account{ID: uuid.New(), Vendor: "openai", AuthType: "api_key", InfisicalPath: path, BaseURL: up.URL + "/v1"}
 	eng := &proxy.Engine{Secrets: sec, HTTP: up.Client()}
@@ -647,8 +647,8 @@ func TestFailoverAttemptsRecorded(t *testing.T) {
 
 	sec := memory.New()
 	idA, idB := uuid.New(), uuid.New()
-	pathA := vendor.InfisicalPath(uuid.New().String(), "deepseek", "a")
-	pathB := vendor.InfisicalPath(uuid.New().String(), "deepseek", "b")
+	pathA := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathB := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathA, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-a"}))
 	_ = sec.Put(context.Background(), pathB, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-b"}))
 
@@ -698,8 +698,8 @@ func TestDispatchFailoverOn401UsesNextAccountDefaultModel(t *testing.T) {
 
 	sec := memory.New()
 	idCodex, idClaude := uuid.New(), uuid.New()
-	pathCodex := vendor.InfisicalPath(uuid.New().String(), "codex", "dead")
-	pathClaude := vendor.InfisicalPath(uuid.New().String(), "claude", "ok")
+	pathCodex := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathClaude := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathCodex, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "sk-codex-dead"}))
 	_ = sec.Put(context.Background(), pathClaude, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "sk-claude-ok"}))
 
@@ -751,8 +751,8 @@ func TestDispatchSkipsClaudeSeatWithoutDefaultOnGptRoute(t *testing.T) {
 
 	sec := memory.New()
 	idClaude, idCodex := uuid.New(), uuid.New()
-	pathClaude := vendor.InfisicalPath(uuid.New().String(), "claude", "nodefault")
-	pathCodex := vendor.InfisicalPath(uuid.New().String(), "codex", "ok")
+	pathClaude := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathCodex := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathClaude, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "sk-claude"}))
 	_ = sec.Put(context.Background(), pathCodex, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "sk-codex"}))
 

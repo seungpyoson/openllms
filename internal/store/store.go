@@ -11,6 +11,7 @@ import (
 	"github.com/goodtekxyz/openllms/internal/apikey"
 	"github.com/goodtekxyz/openllms/internal/ttlcache"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -409,8 +410,9 @@ type Account struct {
 }
 
 var ErrAccountExists = errors.New("account already exists")
+var ErrAccountCommitUnknown = errors.New("account commit outcome unknown")
 
-func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorName, name, authType, infisicalPath, baseURL string, defaultModel ...string) (*Account, error) {
+func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorName, name, authType, infisicalPath, baseURL string, defaultModel ...string) (account *Account, err error) {
 	if authType == "" {
 		authType = "api_key"
 	}
@@ -429,7 +431,23 @@ func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorNa
 		Health:        "ok",
 		DefaultModel:  dm,
 	}
-	err := s.db.QueryRow(ctx, `
+	// Explicit commit separates known failures (no COMMIT sent) from uncertain
+	// commit responses. The caller must preserve credentials in the latter case.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if account != nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("account rollback failed: %w", rollbackErr))
+		}
+	}()
+	err = tx.QueryRow(ctx, `
 		INSERT INTO accounts (id, project_id, vendor, name, auth_type, infisical_path, base_url, default_model)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (project_id, vendor, name) DO NOTHING
@@ -442,6 +460,9 @@ func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorNa
 	}
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAccountCommitUnknown, err)
 	}
 	return &a, nil
 }

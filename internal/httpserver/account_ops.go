@@ -60,7 +60,8 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 	}
 	// Names are user-controlled and may collide after file-path normalization.
 	// Every create owns a fresh secret; the database arbitrates name uniqueness.
-	path := "/llms/" + projectID.String() + "/credentials/" + uuid.NewString()
+	path := vendor.CredentialPath(projectID, uuid.New())
+	var createErr error
 	defer func() {
 		if account != nil {
 			return
@@ -68,6 +69,12 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 		// A canceled request must still clean up its own partially written secret.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
+		if errors.Is(createErr, store.ErrAccountCommitUnknown) {
+			// A follow-up read cannot rule out a commit still completing elsewhere.
+			errBody["error"] = "account_creation_result_unknown"
+			errBody["credential_preserved"] = true
+			return
+		}
 		if err := s.secret.Delete(cleanupCtx, path, vendor.SecretName); err != nil {
 			status = http.StatusInternalServerError
 			errBody["cleanup_error"] = err.Error()
@@ -81,12 +88,12 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 	if err := s.secret.Put(ctx, path, vendor.SecretName, string(raw)); err != nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "infisical_put_failed", "detail": err.Error()}
 	}
-	acc, err := s.store.CreateAccount(ctx, projectID, in.Vendor, in.Name, in.AuthType, path, in.BaseURL, in.DefaultModel)
-	if errors.Is(err, store.ErrAccountExists) {
+	acc, createErr := s.store.CreateAccount(ctx, projectID, in.Vendor, in.Name, in.AuthType, path, in.BaseURL, in.DefaultModel)
+	if createErr == store.ErrAccountExists {
 		return nil, http.StatusConflict, map[string]any{"error": "account_already_exists"}
 	}
-	if err != nil {
-		return nil, http.StatusInternalServerError, map[string]any{"error": err.Error()}
+	if createErr != nil {
+		return nil, http.StatusInternalServerError, map[string]any{"error": createErr.Error()}
 	}
 	return acc, http.StatusCreated, nil
 }

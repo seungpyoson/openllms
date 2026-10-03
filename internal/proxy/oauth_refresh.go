@@ -3,8 +3,10 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -185,6 +187,18 @@ func (e *Engine) RefreshOAuthCredential(ctx context.Context, acc *store.Account,
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func oauthRefreshFailure(acc *store.Account, model string, start time.Time, err error) *Result {
+	status := http.StatusBadGateway
+	var endpointErr *vendorauth.RefreshError
+	if errors.As(err, &endpointErr) {
+		switch endpointErr.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+			status = http.StatusUnauthorized
+		}
+	}
+	return &Result{StatusCode: status, Error: "oauth_refresh_failed", AccountID: acc.ID, Model: model, Latency: time.Since(start)}
+}
 
 // RefreshExpiringOAuth proactively rotates oauth credentials whose expires_at
 // is within lead (default 1h). Safe under the same per-account refresh lock.

@@ -46,8 +46,8 @@ func TestProbeMarksHealthyAndUnhealthy(t *testing.T) {
 
 	sec := memory.New()
 	idOK, idBad := uuid.New(), uuid.New()
-	pOK := vendor.InfisicalPath(uuid.New().String(), "deepseek", "ok")
-	pBad := vendor.InfisicalPath(uuid.New().String(), "deepseek", "bad")
+	pOK := vendor.CredentialPath(uuid.New(), uuid.New())
+	pBad := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pOK, vendor.SecretName, `{"api_key":"good"}`)
 	_ = sec.Put(context.Background(), pBad, vendor.SecretName, `{"api_key":"bad"}`)
 
@@ -84,7 +84,7 @@ func TestOAuthCodexProbeTreatsNon2xxAsHealthyUnlessAuthDeath(t *testing.T) {
 
 	sec := memory.New()
 	id := uuid.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "codex", "oauth")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, `{"access_token":"tok","chatgpt_account_id":"acct"}`)
 	st := &memHealth{
 		accounts: []store.Account{{

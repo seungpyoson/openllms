@@ -54,8 +54,8 @@ func TestStickyPrefersThenRebinds(t *testing.T) {
 
 	sec := memory.New()
 	idA, idB := uuid.New(), uuid.New()
-	pathA := vendor.InfisicalPath(uuid.New().String(), "deepseek", "a")
-	pathB := vendor.InfisicalPath(uuid.New().String(), "deepseek", "b")
+	pathA := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathB := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathA, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-a"}))
 	_ = sec.Put(context.Background(), pathB, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-b"}))
 

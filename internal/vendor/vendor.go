@@ -1,6 +1,10 @@
 package vendor
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/google/uuid"
+)
 
 // DefaultBaseURL returns the upstream OpenAI-compatible base for a vendor.
 func DefaultBaseURL(vendor string) string {
@@ -31,8 +35,9 @@ func DefaultBaseURLFor(vendor, authType string) string {
 	}
 }
 
-func InfisicalPath(projectID, vendor, name string) string {
-	return "/llms/" + projectID + "/accounts/" + vendor + "/" + name
+// CredentialPath uses generated identities rather than user-controlled names.
+func CredentialPath(projectID, credentialID uuid.UUID) string {
+	return "/llms/" + projectID.String() + "/credentials/" + credentialID.String()
 }
 
 const SecretName = "credential"

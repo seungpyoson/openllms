@@ -3,6 +3,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,7 +71,7 @@ func safeRel(path, name string) (string, error) {
 	return filepath.Join(parts...), nil
 }
 
-func (c *Client) Put(_ context.Context, path, name, value string) error {
+func (c *Client) Put(_ context.Context, path, name, value string) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fp, err := c.filePath(path, name)
@@ -80,11 +81,23 @@ func (c *Client) Put(_ context.Context, path, name, value string) error {
 	if err := os.MkdirAll(filepath.Dir(fp), 0o700); err != nil {
 		return err
 	}
-	tmp := fp + ".tmp"
-	if err := os.WriteFile(tmp, []byte(value), 0o600); err != nil {
+	staging, err := os.CreateTemp(filepath.Dir(fp), ".credential-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, fp)
+	defer func() {
+		if err != nil {
+			if cleanupErr := os.Remove(staging.Name()); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("credential staging cleanup: %w", cleanupErr))
+			}
+		}
+	}()
+	_, writeErr := staging.WriteString(value)
+	closeErr := staging.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	return os.Rename(staging.Name(), fp)
 }
 
 func (c *Client) Get(_ context.Context, path, name string) (string, error) {

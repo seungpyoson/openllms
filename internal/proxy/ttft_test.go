@@ -41,8 +41,8 @@ func TestTTFTSilentFailover(t *testing.T) {
 
 	sec := memory.New()
 	idBad, idGood := uuid.New(), uuid.New()
-	pathBad := vendor.InfisicalPath(uuid.New().String(), "deepseek", "bad")
-	pathGood := vendor.InfisicalPath(uuid.New().String(), "deepseek", "good")
+	pathBad := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathGood := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathBad, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-bad"}))
 	_ = sec.Put(context.Background(), pathGood, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-good"}))
 
@@ -86,7 +86,7 @@ func TestTTFTCommitThenNoFailover(t *testing.T) {
 
 	sec := memory.New()
 	id := uuid.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "deepseek", "only")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk"}))
 	st := &memRouteStore{accounts: []store.Account{
 		{ID: id, InfisicalPath: path, BaseURL: up.URL + "/v1", Vendor: "deepseek", Weight: 1},

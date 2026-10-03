@@ -9,6 +9,16 @@ import (
 	"strings"
 )
 
+// RefreshError preserves the token endpoint status without retaining a response
+// body that could contain credentials.
+type RefreshError struct {
+	StatusCode int
+}
+
+func (e *RefreshError) Error() string {
+	return fmt.Sprintf("oauth token endpoint returned HTTP %d", e.StatusCode)
+}
+
 // ClaudeRefresh exchanges a stored refresh_token for a new Claude access token.
 func ClaudeRefresh(ctx context.Context, refreshToken string) (Tokens, error) {
 	form := url.Values{}
@@ -28,7 +38,7 @@ func ClaudeRefresh(ctx context.Context, refreshToken string) (Tokens, error) {
 	defer res.Body.Close()
 	b, _ := io.ReadAll(res.Body)
 	if res.StatusCode >= 300 {
-		return Tokens{}, fmt.Errorf("claude refresh: %s %s", res.Status, truncate(b, 300))
+		return Tokens{}, &RefreshError{StatusCode: res.StatusCode}
 	}
 	return tokensFromRefreshJSON(b, refreshToken)
 }
@@ -52,7 +62,7 @@ func CodexRefresh(ctx context.Context, refreshToken string) (Tokens, error) {
 	defer res.Body.Close()
 	b, _ := io.ReadAll(res.Body)
 	if res.StatusCode >= 300 {
-		return Tokens{}, fmt.Errorf("codex refresh: %s %s", res.Status, truncate(b, 300))
+		return Tokens{}, &RefreshError{StatusCode: res.StatusCode}
 	}
 	return tokensFromRefreshJSON(b, refreshToken)
 }

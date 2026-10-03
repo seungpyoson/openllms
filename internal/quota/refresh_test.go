@@ -28,7 +28,7 @@ func TestRefreshPathCodexCredential(t *testing.T) {
 	t.Cleanup(func() { CodexUsageURL = prev; HTTPClient = nil })
 
 	sec := memory.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "codex", "a")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{
 		AccessToken: "t", ChatGPTAccountID: "acct",
 	}))

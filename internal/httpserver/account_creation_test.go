@@ -76,7 +76,7 @@ func (f accountFixture) create(ctx context.Context, api bool, name, token string
 func TestAccountCreationPreservesLegacyCredential(t *testing.T) {
 	f := newAccountFixture(t)
 	ctx := context.Background()
-	path := vendor.InfisicalPath(f.project.String(), "codex", "legacy")
+	path := "/llms/" + f.project.String() + "/accounts/codex/legacy"
 	if err := f.vault.Put(ctx, path, vendor.SecretName, `{"access_token":"synthetic-legacy","refresh_token":"synthetic-refresh"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func (s createFaultSecrets) Delete(ctx context.Context, path, name string) error
 }
 
 func TestAccountCreationFailureCleanup(t *testing.T) {
-	for _, kind := range []string{"put", "database", "canceled", "cleanup"} {
+	for _, kind := range []string{"put", "database", "unavailable_database", "canceled", "cleanup"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newAccountFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -267,6 +267,12 @@ func TestAccountCreationFailureCleanup(t *testing.T) {
 			case "put":
 				fault.putError = true
 			case "database":
+				fault.afterPut = func() {
+					if _, err := f.db.Exec("DELETE FROM projects WHERE id = ?", f.project.String()); err != nil {
+						t.Error(err)
+					}
+				}
+			case "unavailable_database":
 				fault.afterPut = func() { _ = f.db.Close() }
 			case "canceled":
 				fault.afterPut = cancel
@@ -282,6 +288,9 @@ func TestAccountCreationFailureCleanup(t *testing.T) {
 			if kind == "cleanup" {
 				if !strings.Contains(fmt.Sprint(body), "cleanup") {
 					t.Error("cleanup failure was hidden")
+				}
+				if f.secretFiles(t) != 1 {
+					t.Error("unresolved ownership or cleanup must preserve the credential")
 				}
 			} else if f.secretFiles(t) != 0 {
 				t.Error("failed create left a secret on disk")

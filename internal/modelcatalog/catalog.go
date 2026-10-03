@@ -2,6 +2,7 @@ package modelcatalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,9 +49,10 @@ type RouteModels struct {
 }
 
 type cacheEntry struct {
-	Models []Model
-	Status string
-	Error  string
+	Credential [sha256.Size]byte
+	Models     []Model
+	Status     string
+	Error      string
 }
 
 // Credentials is shared with inference and proactive refresh to serialize token rotation.
@@ -152,8 +154,13 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 		return am
 	}
 	cacheKey := a.ID.String()
+	cred, token, err := d.credentials.LoadCredential(ctx, &a)
+	if err != nil {
+		am.Status, am.Error = "error", err.Error()
+		return am
+	}
 	if d.cache != nil {
-		if hit, ok := d.cache.Get(cacheKey); ok {
+		if hit, ok := d.cache.Get(cacheKey); ok && hit.Credential == credentialFingerprint(cred) {
 			am.Models = hit.Models
 			am.Status = hit.Status
 			am.Error = hit.Error
@@ -162,7 +169,7 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 		}
 	}
 
-	models, err := d.discoverLive(ctx, &a)
+	models, usedCred, err := d.discoverLive(ctx, &a, cred, token)
 	if err != nil || len(models) == 0 {
 		am.Status = "error"
 		if err != nil {
@@ -170,54 +177,44 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 		} else {
 			am.Error = "no_models"
 		}
-		return am
+	} else {
+		am.Models = models
+		am.DefaultModel = defaultOf(models)
 	}
-	am.Models = models
-	am.DefaultModel = defaultOf(models)
 	if d.cache != nil {
-		d.cache.Set(cacheKey, cacheEntry{Models: models, Status: "ok", Error: am.Error})
+		// Cache failures too, but a newly persisted credential must allow recovery.
+		d.cache.Set(cacheKey, cacheEntry{Credential: credentialFingerprint(usedCred), Models: am.Models, Status: am.Status, Error: am.Error})
 	}
 	return am
 }
 
-func (d *Discoverer) discoverLive(ctx context.Context, a *store.Account) ([]Model, error) {
-	cred, token, err := d.credentials.LoadCredential(ctx, a)
-	if err != nil {
-		return nil, err
-	}
+func credentialFingerprint(cred secrets.CredentialJSON) [sha256.Size]byte {
+	raw, _ := json.Marshal(cred)
+	return sha256.Sum256(raw)
+}
 
+func (d *Discoverer) discoverLive(ctx context.Context, a *store.Account, cred secrets.CredentialJSON, token string) ([]Model, secrets.CredentialJSON, error) {
 	models, status, err := d.fetchModelsOnce(ctx, a, cred, token)
 	if err == nil {
-		return models, nil
+		return models, cred, nil
 	}
 	// OAuth: one refresh+retry on auth failure (models list does not go through the proxy 401 path).
-	if isOAuthAccount(a) && isAuthFailure(status, err) && cred.RefreshToken != "" {
+	if isOAuthAccount(a) && status == http.StatusUnauthorized && cred.RefreshToken != "" {
 		fresh, rerr := d.credentials.RefreshOAuthCredential(ctx, a, cred)
 		if rerr != nil {
-			return nil, fmt.Errorf("%w; refresh_failed:%v", err, rerr)
+			return nil, cred, fmt.Errorf("%w; refresh_failed:%v", err, rerr)
 		}
 		models, _, err2 := d.fetchModelsOnce(ctx, a, fresh, fresh.BearerToken())
 		if err2 != nil {
-			return nil, err2
+			return nil, fresh, err2
 		}
-		return models, nil
+		return models, fresh, nil
 	}
-	return nil, err
+	return nil, cred, err
 }
 
 func isOAuthAccount(a *store.Account) bool {
 	return a != nil && strings.EqualFold(a.AuthType, "oauth")
-}
-
-func isAuthFailure(status int, err error) bool {
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return true
-	}
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return strings.Contains(s, "upstream_401") || strings.Contains(s, "upstream_403")
 }
 
 func (d *Discoverer) fetchModelsOnce(ctx context.Context, a *store.Account, cred secrets.CredentialJSON, token string) ([]Model, int, error) {

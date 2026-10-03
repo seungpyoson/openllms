@@ -38,8 +38,8 @@ func TestParallelPicksFasterTTFT(t *testing.T) {
 
 	sec := memory.New()
 	idSlow, idFast := uuid.New(), uuid.New()
-	pathS := vendor.InfisicalPath(uuid.New().String(), "deepseek", "slow")
-	pathF := vendor.InfisicalPath(uuid.New().String(), "deepseek", "fast")
+	pathS := vendor.CredentialPath(uuid.New(), uuid.New())
+	pathF := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), pathS, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-slow"}))
 	_ = sec.Put(context.Background(), pathF, vendor.SecretName, mustJSON(secrets.CredentialJSON{APIKey: "sk-fast"}))
 
@@ -70,7 +70,7 @@ func TestParallelSkipsOAuthUnlessAllowed(t *testing.T) {
 	defer up.Close()
 	sec := memory.New()
 	id := uuid.New()
-	path := vendor.InfisicalPath(uuid.New().String(), "claude", "o")
+	path := vendor.CredentialPath(uuid.New(), uuid.New())
 	_ = sec.Put(context.Background(), path, vendor.SecretName, mustJSON(secrets.CredentialJSON{AccessToken: "tok"}))
 	st := &memRouteStore{accounts: []store.Account{
 		{ID: id, InfisicalPath: path, BaseURL: up.URL + "/v1", Vendor: "claude", AuthType: "oauth", Weight: 1},
