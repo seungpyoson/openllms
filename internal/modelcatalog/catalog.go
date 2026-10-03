@@ -181,8 +181,9 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 		am.Models = models
 		am.DefaultModel = defaultOf(models)
 	}
-	if d.cache != nil {
+	if d.cache != nil && ctx.Err() == nil {
 		// Cache failures too, but a newly persisted credential must allow recovery.
+		// A caller's canceled request says nothing about other callers' access.
 		d.cache.Set(cacheKey, cacheEntry{Credential: credentialFingerprint(usedCred), Models: am.Models, Status: am.Status, Error: am.Error})
 	}
 	return am

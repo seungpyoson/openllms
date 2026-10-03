@@ -72,7 +72,9 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 		if errors.Is(createErr, store.ErrAccountCommitUnknown) {
 			// A follow-up read cannot rule out a commit still completing elsewhere.
 			errBody["error"] = "account_creation_result_unknown"
+			errBody["detail"] = createErr.Error()
 			errBody["credential_preserved"] = true
+			errBody["credential_path"] = path
 			return
 		}
 		if err := s.secret.Delete(cleanupCtx, path, vendor.SecretName); err != nil {
@@ -88,7 +90,9 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 	if err := s.secret.Put(ctx, path, vendor.SecretName, string(raw)); err != nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "infisical_put_failed", "detail": err.Error()}
 	}
-	acc, createErr := s.store.CreateAccount(ctx, projectID, in.Vendor, in.Name, in.AuthType, path, in.BaseURL, in.DefaultModel)
+	var acc *store.Account
+	acc, createErr = s.store.CreateAccount(ctx, projectID, in.Vendor, in.Name, in.AuthType, path, in.BaseURL, in.DefaultModel)
+	// Only an unwrapped conflict means the required rollback also succeeded.
 	if createErr == store.ErrAccountExists {
 		return nil, http.StatusConflict, map[string]any{"error": "account_already_exists"}
 	}

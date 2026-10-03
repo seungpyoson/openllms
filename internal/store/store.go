@@ -12,6 +12,7 @@ import (
 	"github.com/goodtekxyz/openllms/internal/ttlcache"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -461,7 +462,13 @@ func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorNa
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
+		if pgconn.SafeToRetry(err) || errors.Is(err, pgx.ErrTxCommitRollback) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %v", ErrAccountCommitUnknown, err)
 	}
 	return &a, nil
