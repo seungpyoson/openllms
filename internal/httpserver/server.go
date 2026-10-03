@@ -326,7 +326,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		accOut = append(accOut, map[string]any{
 			"ref": a.Vendor + ":" + a.Name, "health": a.Health, "glyph": glyph, "id": a.ID.String(),
-			"quota_remaining_pct": a.QuotaRemainingPct, "quota_reset_at": a.QuotaResetAt, "quota_updated_at": a.QuotaUpdatedAt,
+			"quota_remaining_pct":    a.QuotaRemainingPct, "quota_reset_at": a.QuotaResetAt, "quota_updated_at": a.QuotaUpdatedAt,
 			"quota_5h_remaining_pct": a.Quota5hRemainingPct, "quota_5h_reset_at": a.Quota5hResetAt,
 			"quota_7d_remaining_pct": a.Quota7dRemainingPct, "quota_7d_reset_at": a.Quota7dResetAt,
 		})
@@ -797,64 +797,14 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlanCapacity(w, r, ac.ProjectID, "account") {
 		return
 	}
-	if s.secret == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"error": "infisical_not_configured",
-			"hint":  "See docs/ops/HUMAN-SETUP.md — set INFISICAL_PROJECT_ID, INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET",
-		})
+	var body accountCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
 		return
 	}
-	var body struct {
-		Vendor       string `json:"vendor"`
-		Name         string `json:"name"`
-		APIKey       string `json:"api_key"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresAt    string `json:"expires_at"`
-		IDToken      string `json:"id_token"`
-		ChatGPTAcct  string `json:"chatgpt_account_id"`
-		AuthType     string `json:"auth_type"`
-		BaseURL      string `json:"base_url"`
-		DefaultModel string `json:"default_model"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Vendor == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "vendor required"})
-		return
-	}
-	if body.Name == "" {
-		body.Name = "default"
-	}
-	if body.AuthType == "" {
-		if body.AccessToken != "" {
-			body.AuthType = "oauth"
-		} else {
-			body.AuthType = "api_key"
-		}
-	}
-	if body.AuthType == "api_key" && body.APIKey == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "api_key required for auth_type=api_key"})
-		return
-	}
-	if body.AuthType == "oauth" && body.AccessToken == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "access_token required for auth_type=oauth"})
-		return
-	}
-	if body.BaseURL == "" {
-		body.BaseURL = vendor.DefaultBaseURLFor(body.Vendor, body.AuthType)
-	}
-	path := vendor.InfisicalPath(ac.ProjectID.String(), body.Vendor, body.Name)
-	cred := secrets.CredentialJSON{
-		APIKey: body.APIKey, AccessToken: body.AccessToken, RefreshToken: body.RefreshToken,
-		ExpiresAt: body.ExpiresAt, IDToken: body.IDToken, ChatGPTAccountID: body.ChatGPTAcct,
-	}
-	raw, _ := json.Marshal(cred)
-	if err := s.secret.Put(r.Context(), path, vendor.SecretName, string(raw)); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "infisical_put_failed", "detail": err.Error()})
-		return
-	}
-	acc, err := s.store.CreateAccount(r.Context(), ac.ProjectID, body.Vendor, body.Name, body.AuthType, path, body.BaseURL, body.DefaultModel)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+	acc, code, errBody := s.createAccountForProjectInner(r.Context(), ac.ProjectID, body)
+	if acc == nil {
+		writeJSON(w, code, errBody)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

@@ -3,7 +3,9 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/goodtekxyz/openllms/internal/secrets"
 	"github.com/goodtekxyz/openllms/internal/store"
@@ -27,7 +29,7 @@ type accountCreateInput struct {
 }
 
 // createAccountForProjectInner creates an upstream account; caller must gate plan capacity.
-func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uuid.UUID, in accountCreateInput) (*store.Account, int, map[string]any) {
+func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uuid.UUID, in accountCreateInput) (account *store.Account, status int, errBody map[string]any) {
 	if s.secret == nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{
 			"error": "infisical_not_configured",
@@ -56,7 +58,21 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 	if in.BaseURL == "" {
 		in.BaseURL = vendor.DefaultBaseURLFor(in.Vendor, in.AuthType)
 	}
-	path := vendor.InfisicalPath(projectID.String(), in.Vendor, in.Name)
+	// Names are user-controlled and may collide after file-path normalization.
+	// Every create owns a fresh secret; the database arbitrates name uniqueness.
+	path := "/llms/" + projectID.String() + "/credentials/" + uuid.NewString()
+	defer func() {
+		if account != nil {
+			return
+		}
+		// A canceled request must still clean up its own partially written secret.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := s.secret.Delete(cleanupCtx, path, vendor.SecretName); err != nil {
+			status = http.StatusInternalServerError
+			errBody["cleanup_error"] = err.Error()
+		}
+	}()
 	cred := secrets.CredentialJSON{
 		APIKey: in.APIKey, AccessToken: in.AccessToken, RefreshToken: in.RefreshToken,
 		ExpiresAt: in.ExpiresAt, IDToken: in.IDToken, ChatGPTAccountID: in.ChatGPTAcct,
@@ -66,6 +82,9 @@ func (s *Server) createAccountForProjectInner(ctx context.Context, projectID uui
 		return nil, http.StatusBadGateway, map[string]any{"error": "infisical_put_failed", "detail": err.Error()}
 	}
 	acc, err := s.store.CreateAccount(ctx, projectID, in.Vendor, in.Name, in.AuthType, path, in.BaseURL, in.DefaultModel)
+	if errors.Is(err, store.ErrAccountExists) {
+		return nil, http.StatusConflict, map[string]any{"error": "account_already_exists"}
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, map[string]any{"error": err.Error()}
 	}

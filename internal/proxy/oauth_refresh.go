@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -49,9 +50,6 @@ func (e *Engine) log() *slog.Logger {
 }
 
 func (e *Engine) oauthLock(accountID uuid.UUID) *sync.Mutex {
-	if e.refreshGates == nil {
-		e.refreshGates = &refreshGates{}
-	}
 	return e.refreshGates.lock(accountID.String())
 }
 
@@ -115,9 +113,9 @@ func putCredentialWithRetry(ctx context.Context, sec secrets.Client, path, name,
 	return err
 }
 
-// refreshOAuthCredential serializes refresh per account, re-reads durable secrets
+// RefreshOAuthCredential serializes refresh per account, re-reads durable secrets
 // before rotating, and never drops newly issued tokens when Put fails.
-func (e *Engine) refreshOAuthCredential(ctx context.Context, acc *store.Account, old secrets.CredentialJSON) (secrets.CredentialJSON, error) {
+func (e *Engine) RefreshOAuthCredential(ctx context.Context, acc *store.Account, old secrets.CredentialJSON) (secrets.CredentialJSON, error) {
 	mu := e.oauthLock(acc.ID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -128,26 +126,24 @@ func (e *Engine) refreshOAuthCredential(ctx context.Context, acc *store.Account,
 		raw, _ := json.Marshal(pending)
 		if err := putCredentialWithRetry(ctx, e.Secrets, acc.InfisicalPath, vendor.SecretName, string(raw)); err != nil {
 			log.Error("oauth pending put still failing", "err", err)
-			e.storePendingCred(acc.ID, pending)
-		} else {
-			e.clearPendingCred(acc.ID)
-			log.Info("oauth pending credential persisted")
+			return secrets.CredentialJSON{}, fmt.Errorf("persist pending oauth credential: %w", err)
 		}
-		if credsRotated(pending, old) || pending.AccessToken != "" {
-			return pending, nil
-		}
+		e.clearPendingCred(acc.ID)
+		e.invalidateSecretCache(acc.InfisicalPath, vendor.SecretName)
+		log.Info("oauth pending credential persisted")
+		return pending, nil
 	}
 
 	e.invalidateSecretCache(acc.InfisicalPath, vendor.SecretName)
-	fresh, _, err := e.loadCredential(ctx, acc)
-	if err == nil && credsRotated(fresh, old) {
+	fresh, _, err := e.LoadCredential(ctx, acc)
+	if err != nil {
+		return secrets.CredentialJSON{}, err
+	}
+	if credsRotated(fresh, old) {
 		log.Info("oauth already rotated; skipping refresh")
 		return fresh, nil
 	}
-	refreshTok := old.RefreshToken
-	if err == nil && fresh.RefreshToken != "" {
-		refreshTok = fresh.RefreshToken
-	}
+	refreshTok := fresh.RefreshToken
 	if strings.TrimSpace(refreshTok) == "" {
 		return secrets.CredentialJSON{}, errString("missing refresh_token")
 	}
@@ -178,9 +174,10 @@ func (e *Engine) refreshOAuthCredential(ctx context.Context, acc *store.Account,
 	if err := putCredentialWithRetry(ctx, e.Secrets, acc.InfisicalPath, vendor.SecretName, string(b)); err != nil {
 		e.storePendingCred(acc.ID, cred)
 		log.Error("oauth refresh put failed; keeping new tokens in memory", "err", err)
-		return cred, nil
+		return secrets.CredentialJSON{}, fmt.Errorf("persist refreshed oauth credential: %w", err)
 	}
 	e.clearPendingCred(acc.ID)
+	e.invalidateSecretCache(acc.InfisicalPath, vendor.SecretName)
 	log.Info("oauth refresh persisted")
 	return cred, nil
 }
@@ -205,7 +202,7 @@ func (e *Engine) RefreshExpiringOAuth(ctx context.Context, accounts []store.Acco
 			skipped++
 			continue
 		}
-		cred, _, err := e.loadCredential(ctx, &acc)
+		cred, _, err := e.LoadCredential(ctx, &acc)
 		if err != nil {
 			failed++
 			e.log().Warn("oauth proactive load", "account_id", acc.ID.String(), "err", err)
@@ -219,7 +216,7 @@ func (e *Engine) RefreshExpiringOAuth(ctx context.Context, accounts []store.Acco
 			skipped++
 			continue
 		}
-		if _, err := e.refreshOAuthCredential(ctx, &acc, cred); err != nil {
+		if _, err := e.RefreshOAuthCredential(ctx, &acc, cred); err != nil {
 			failed++
 			continue
 		}

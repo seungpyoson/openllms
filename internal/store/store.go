@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -407,6 +408,8 @@ type Account struct {
 	Quota7dResetAt      *time.Time
 }
 
+var ErrAccountExists = errors.New("account already exists")
+
 func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorName, name, authType, infisicalPath, baseURL string, defaultModel ...string) (*Account, error) {
 	if authType == "" {
 		authType = "api_key"
@@ -429,10 +432,14 @@ func (s *Store) CreateAccount(ctx context.Context, projectID uuid.UUID, vendorNa
 	err := s.db.QueryRow(ctx, `
 		INSERT INTO accounts (id, project_id, vendor, name, auth_type, infisical_path, base_url, default_model)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (project_id, vendor, name) DO NOTHING
 		RETURNING id, project_id, vendor, name, auth_type, infisical_path, base_url, health, default_model
 	`, a.ID, projectID, vendorName, name, authType, infisicalPath, baseURL, dm).Scan(
 		&a.ID, &a.ProjectID, &a.Vendor, &a.Name, &a.AuthType, &a.InfisicalPath, &a.BaseURL, &a.Health, &a.DefaultModel,
 	)
+	if isNoRows(err) {
+		return nil, ErrAccountExists
+	}
 	if err != nil {
 		return nil, err
 	}

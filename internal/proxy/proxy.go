@@ -65,23 +65,29 @@ type Engine struct {
 	Affinity *Affinity
 	Log      *slog.Logger
 
-	refreshGates *refreshGates
+	refreshGates refreshGates
+	selectorOnce sync.Once
+	affinityOnce sync.Once
 
 	pendingMu    sync.Mutex
 	pendingCreds map[string]secrets.CredentialJSON
 }
 
 func (e *Engine) affinity() *Affinity {
-	if e.Affinity == nil {
-		e.Affinity = NewAffinity(DefaultAffinityTTL)
-	}
+	e.affinityOnce.Do(func() {
+		if e.Affinity == nil {
+			e.Affinity = NewAffinity(DefaultAffinityTTL)
+		}
+	})
 	return e.Affinity
 }
 
 func (e *Engine) selector() *router.Selector {
-	if e.Selector == nil {
-		e.Selector = router.NewSelector()
-	}
+	e.selectorOnce.Do(func() {
+		if e.Selector == nil {
+			e.Selector = router.NewSelector()
+		}
+	})
 	return e.Selector
 }
 
@@ -543,7 +549,7 @@ func (e *Engine) callResponsesImages(ctx context.Context, acc *store.Account, bo
 	url := resolveResponsesURL(acc)
 	n := imagesRequestCount(body)
 
-	cred, token, err := e.loadCredential(ctx, acc)
+	cred, token, err := e.LoadCredential(ctx, acc)
 	if err != nil {
 		return &Result{StatusCode: http.StatusBadGateway, Error: err.Error(), AccountID: acc.ID, Latency: time.Since(start)}, err
 	}
@@ -555,7 +561,7 @@ func (e *Engine) callResponsesImages(ctx context.Context, acc *store.Account, bo
 			return res, err
 		}
 		if res.StatusCode == http.StatusUnauthorized && strings.EqualFold(acc.AuthType, "oauth") && strings.TrimSpace(cred.RefreshToken) != "" {
-			newCred, rerr := e.refreshOAuthCredential(ctx, acc, cred)
+			newCred, rerr := e.RefreshOAuthCredential(ctx, acc, cred)
 			if rerr == nil {
 				cred, token = newCred, newCred.BearerToken()
 				res, err = e.execCodexImagesOnce(ctx, acc, respBody, url, cred, token, model, start)
@@ -730,7 +736,7 @@ func (e *Engine) doUpstream(ctx context.Context, acc *store.Account, body []byte
 
 // doUpstreamOnce performs one upstream call; on oauth 401 with refresh_token, refreshes once and retries.
 func (e *Engine) doUpstreamOnce(ctx context.Context, acc *store.Account, body []byte, url, authHeader, bearerPrefix string, openaiAuth bool, model string, stream bool, start time.Time, codexResponses bool, anthropicBridge bool) (*Result, error) {
-	cred, token, err := e.loadCredential(ctx, acc)
+	cred, token, err := e.LoadCredential(ctx, acc)
 	if err != nil {
 		return &Result{StatusCode: http.StatusBadGateway, Error: err.Error(), AccountID: acc.ID, Latency: time.Since(start)}, err
 	}
@@ -746,14 +752,18 @@ func (e *Engine) doUpstreamOnce(ctx context.Context, acc *store.Account, body []
 		_ = res.Stream.Close()
 		res.Stream = nil
 	}
-	newCred, rerr := e.refreshOAuthCredential(ctx, acc, cred)
+	newCred, rerr := e.RefreshOAuthCredential(ctx, acc, cred)
 	if rerr != nil {
-		return res, nil // surface original 401
+		return &Result{StatusCode: http.StatusBadGateway, Error: "oauth_refresh_failed", AccountID: acc.ID, Model: model, Latency: time.Since(start)}, nil
 	}
 	return e.execUpstream(ctx, acc, body, url, authHeader, bearerPrefix, openaiAuth, newCred, newCred.BearerToken(), model, stream, start, codexResponses, anthropicBridge)
 }
 
-func (e *Engine) loadCredential(ctx context.Context, acc *store.Account) (secrets.CredentialJSON, string, error) {
+// LoadCredential reads the durable credential shared by inference and discovery.
+func (e *Engine) LoadCredential(ctx context.Context, acc *store.Account) (secrets.CredentialJSON, string, error) {
+	if e == nil || e.Secrets == nil {
+		return secrets.CredentialJSON{}, "", fmt.Errorf("secrets_unavailable")
+	}
 	raw, err := e.Secrets.Get(ctx, acc.InfisicalPath, vendor.SecretName)
 	if err != nil {
 		return secrets.CredentialJSON{}, "", fmt.Errorf("secret_fetch")

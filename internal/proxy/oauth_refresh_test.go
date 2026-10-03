@@ -156,8 +156,10 @@ func TestOAuthRefreshSingleflight(t *testing.T) {
 	}
 }
 
-func TestOAuthRefreshSurvivesPutFailure(t *testing.T) {
+func TestOAuthRefreshPersistenceFailureRejectsRequestAndRecovers(t *testing.T) {
+	var rotations atomic.Int32
 	tok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rotations.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "new-at", "refresh_token": "new-rt", "expires_in": 3600,
 		})
@@ -201,8 +203,8 @@ func TestOAuthRefreshSurvivesPutFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.StatusCode != 200 {
-		t.Fatalf("want 200 despite Put fail, got %d", res.StatusCode)
+	if res.StatusCode != http.StatusBadGateway || res.Error != "oauth_refresh_failed" {
+		t.Fatalf("persistence failure must reject request, got status=%d error=%s", res.StatusCode, res.Error)
 	}
 	// Durable store still old
 	raw, _ := inner.Get(context.Background(), path, vendor.SecretName)
@@ -211,12 +213,12 @@ func TestOAuthRefreshSurvivesPutFailure(t *testing.T) {
 	}
 	// Next refresh path should retry pending Put when flaky allows
 	sec.failLeft = 0
-	cred, rerr := eng.refreshOAuthCredential(context.Background(), acc, secrets.CredentialJSON{AccessToken: "old-at", RefreshToken: "old-rt"})
+	res, rerr := eng.doUpstream(context.Background(), acc, []byte(`{"model":"m"}`), up.URL+"/v1/messages", "Authorization", "Bearer ", true)
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
-	if cred.AccessToken != "new-at" {
-		t.Fatalf("cred %+v", cred)
+	if res.StatusCode != http.StatusOK || rotations.Load() != 1 {
+		t.Fatalf("recovery status=%d rotations=%d", res.StatusCode, rotations.Load())
 	}
 	raw, _ = inner.Get(context.Background(), path, vendor.SecretName)
 	if !strings.Contains(raw, "new-at") {
@@ -252,7 +254,7 @@ func TestOAuthAlreadyRotatedSkipsRefresh(t *testing.T) {
 	}
 	eng := &Engine{Secrets: sec}
 	old := secrets.CredentialJSON{AccessToken: "old-at", RefreshToken: "old-rt"}
-	cred, err := eng.refreshOAuthCredential(context.Background(), acc, old)
+	cred, err := eng.RefreshOAuthCredential(context.Background(), acc, old)
 	if err != nil {
 		t.Fatal(err)
 	}

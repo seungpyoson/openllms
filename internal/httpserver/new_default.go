@@ -26,13 +26,14 @@ func New(st *store.Store, cfg config.Config, secret secrets.Client) *Server {
 		TTL:    12 * time.Hour,
 		Secure: cfg.AdminCookieSecure,
 	}
+	engine := &proxy.Engine{Store: st, Secrets: secret, HTTP: &http.Client{Timeout: 120 * time.Second}}
 	return &Server{
 		cfg:           cfg,
 		store:         st,
 		secret:        secret,
-		proxy:         &proxy.Engine{Store: st, Secrets: secret, HTTP: &http.Client{Timeout: 120 * time.Second}},
+		proxy:         engine,
 		limit:         ratelimit.NewMemory(cfg.RateLimitPerMin, time.Minute),
-		models:        modelcatalog.New(secret, &http.Client{Timeout: 12 * time.Second}, modelcatalog.DefaultCacheTTL),
+		models:        modelcatalog.New(engine, &http.Client{Timeout: 12 * time.Second}, modelcatalog.DefaultCacheTTL),
 		admin:         disabledAdmin{},
 		user:          user,
 		mailer:        noopMailer{},

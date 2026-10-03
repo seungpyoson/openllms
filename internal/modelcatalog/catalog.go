@@ -13,7 +13,6 @@ import (
 	"github.com/goodtekxyz/openllms/internal/store"
 	"github.com/goodtekxyz/openllms/internal/ttlcache"
 	"github.com/goodtekxyz/openllms/internal/vendor"
-	"github.com/goodtekxyz/openllms/internal/vendorauth"
 )
 
 const DefaultCacheTTL = 5 * time.Minute
@@ -54,14 +53,23 @@ type cacheEntry struct {
 	Error  string
 }
 
-// Discoverer loads provider-backed chat models for route accounts.
-type Discoverer struct {
-	Secrets secrets.Client
-	HTTP    *http.Client
-	cache   *ttlcache.Cache[string, cacheEntry]
+// Credentials is shared with inference and proactive refresh to serialize token rotation.
+type Credentials interface {
+	LoadCredential(context.Context, *store.Account) (secrets.CredentialJSON, string, error)
+	RefreshOAuthCredential(context.Context, *store.Account, secrets.CredentialJSON) (secrets.CredentialJSON, error)
 }
 
-func New(sec secrets.Client, httpClient *http.Client, cacheTTL time.Duration) *Discoverer {
+// Discoverer loads provider-backed chat models for route accounts.
+type Discoverer struct {
+	credentials Credentials
+	HTTP        *http.Client
+	cache       *ttlcache.Cache[string, cacheEntry]
+}
+
+func New(credentials Credentials, httpClient *http.Client, cacheTTL time.Duration) *Discoverer {
+	if credentials == nil {
+		panic("modelcatalog: credentials required")
+	}
 	if cacheTTL <= 0 {
 		cacheTTL = DefaultCacheTTL
 	}
@@ -69,9 +77,9 @@ func New(sec secrets.Client, httpClient *http.Client, cacheTTL time.Duration) *D
 		httpClient = &http.Client{Timeout: 12 * time.Second}
 	}
 	return &Discoverer{
-		Secrets: sec,
-		HTTP:    httpClient,
-		cache:   ttlcache.New[string, cacheEntry](cacheTTL),
+		credentials: credentials,
+		HTTP:        httpClient,
+		cache:       ttlcache.New[string, cacheEntry](cacheTTL),
 	}
 }
 
@@ -138,7 +146,7 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 		Models:   nil,
 		Status:   "ok",
 	}
-	if d == nil || d.Secrets == nil {
+	if d == nil || d.credentials == nil {
 		am.Status = "error"
 		am.Error = "secrets_unavailable"
 		return am
@@ -156,25 +164,13 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 
 	models, err := d.discoverLive(ctx, &a)
 	if err != nil || len(models) == 0 {
-		models = fallbackModels(a.Vendor, a.AuthType)
-		if len(models) == 0 {
-			am.Status = "error"
-			if err != nil {
-				am.Error = err.Error()
-			} else {
-				am.Error = "no_models"
-			}
-			if d.cache != nil {
-				d.cache.Set(cacheKey, cacheEntry{Status: am.Status, Error: am.Error})
-			}
-			return am
-		}
-		// Fallback used after live miss — still ok for consumers; keep cause for operators.
+		am.Status = "error"
 		if err != nil {
-			am.Error = "upstream_unavailable_using_known_list:" + err.Error()
+			am.Error = err.Error()
 		} else {
-			am.Error = "upstream_unavailable_using_known_list:empty"
+			am.Error = "no_models"
 		}
+		return am
 	}
 	am.Models = models
 	am.DefaultModel = defaultOf(models)
@@ -185,17 +181,9 @@ func (d *Discoverer) forAccount(ctx context.Context, a store.Account) AccountMod
 }
 
 func (d *Discoverer) discoverLive(ctx context.Context, a *store.Account) ([]Model, error) {
-	raw, err := d.Secrets.Get(ctx, a.InfisicalPath, vendor.SecretName)
+	cred, token, err := d.credentials.LoadCredential(ctx, a)
 	if err != nil {
 		return nil, err
-	}
-	var cred secrets.CredentialJSON
-	if err := json.Unmarshal([]byte(raw), &cred); err != nil {
-		return nil, fmt.Errorf("bad_secret")
-	}
-	token := cred.BearerToken()
-	if token == "" {
-		return nil, fmt.Errorf("missing_token")
 	}
 
 	models, status, err := d.fetchModelsOnce(ctx, a, cred, token)
@@ -204,7 +192,7 @@ func (d *Discoverer) discoverLive(ctx context.Context, a *store.Account) ([]Mode
 	}
 	// OAuth: one refresh+retry on auth failure (models list does not go through the proxy 401 path).
 	if isOAuthAccount(a) && isAuthFailure(status, err) && cred.RefreshToken != "" {
-		fresh, rerr := d.refreshOAuthCred(ctx, a, cred)
+		fresh, rerr := d.credentials.RefreshOAuthCredential(ctx, a, cred)
 		if rerr != nil {
 			return nil, fmt.Errorf("%w; refresh_failed:%v", err, rerr)
 		}
@@ -230,37 +218,6 @@ func isAuthFailure(status int, err error) bool {
 	}
 	s := err.Error()
 	return strings.Contains(s, "upstream_401") || strings.Contains(s, "upstream_403")
-}
-
-func (d *Discoverer) refreshOAuthCred(ctx context.Context, a *store.Account, old secrets.CredentialJSON) (secrets.CredentialJSON, error) {
-	toks, err := vendorauth.Refresh(ctx, a.Vendor, old.RefreshToken)
-	if err != nil {
-		return secrets.CredentialJSON{}, err
-	}
-	fresh := secrets.CredentialJSON{
-		AccessToken:      toks.AccessToken,
-		RefreshToken:     toks.RefreshToken,
-		ExpiresAt:        toks.ExpiresAt,
-		IDToken:          toks.IDToken,
-		ChatGPTAccountID: toks.ChatGPTAccountID,
-	}
-	if fresh.RefreshToken == "" {
-		fresh.RefreshToken = old.RefreshToken
-	}
-	if fresh.ChatGPTAccountID == "" {
-		fresh.ChatGPTAccountID = old.ChatGPTAccountID
-	}
-	b, err := json.Marshal(fresh)
-	if err != nil {
-		return fresh, err
-	}
-	if err := d.Secrets.Put(ctx, a.InfisicalPath, vendor.SecretName, string(b)); err != nil {
-		return fresh, err
-	}
-	if inv, ok := d.Secrets.(secrets.CacheInvalidator); ok {
-		inv.Invalidate(a.InfisicalPath, vendor.SecretName)
-	}
-	return fresh, nil
 }
 
 func (d *Discoverer) fetchModelsOnce(ctx context.Context, a *store.Account, cred secrets.CredentialJSON, token string) ([]Model, int, error) {
@@ -473,28 +430,6 @@ func isCodexOAuth(a *store.Account) bool {
 	}
 	v := strings.ToLower(a.Vendor)
 	return v == "codex" || v == "openai"
-}
-
-// Known lists when live discovery fails (network/auth). Prefer upstream when available.
-func fallbackModels(vendorName, authType string) []Model {
-	v := strings.ToLower(vendorName)
-	oauth := strings.EqualFold(authType, "oauth")
-	switch {
-	case oauth && (v == "codex" || v == "openai"):
-		return []Model{
-			{ID: "gpt-5.5", OwnedBy: "openai"},
-			{ID: "gpt-5.4", OwnedBy: "openai"},
-			{ID: "gpt-5.4-mini", OwnedBy: "openai"},
-		}
-	case oauth && (v == "claude" || v == "anthropic"):
-		return []Model{
-			{ID: "claude-sonnet-4-5", OwnedBy: "anthropic"},
-			{ID: "claude-opus-4-5", OwnedBy: "anthropic"},
-			{ID: "claude-haiku-4-5", OwnedBy: "anthropic"},
-		}
-	default:
-		return nil
-	}
 }
 
 // ParseCodexModelsJSONForTest exposes Codex backend model parsing for unit tests.

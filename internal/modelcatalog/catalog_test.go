@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/goodtekxyz/openllms/internal/modelcatalog"
+	"github.com/goodtekxyz/openllms/internal/proxy"
 	"github.com/goodtekxyz/openllms/internal/secrets/memory"
 	"github.com/goodtekxyz/openllms/internal/store"
 	"github.com/goodtekxyz/openllms/internal/vendorauth"
@@ -35,7 +36,7 @@ func TestOpenAIListNeverUsesAccountRefs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d := modelcatalog.New(sec, srv.Client(), time.Minute)
+	d := modelcatalog.New(&proxy.Engine{Secrets: sec}, srv.Client(), time.Minute)
 	acc := store.Account{
 		ID: uuid.New(), Vendor: "deepseek", Name: "work", AuthType: "api_key",
 		InfisicalPath: path, BaseURL: srv.URL + "/v1",
@@ -79,7 +80,7 @@ func TestCodexOAuthFetchesLiveModels(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d := modelcatalog.New(sec, srv.Client(), time.Minute)
+	d := modelcatalog.New(&proxy.Engine{Secrets: sec}, srv.Client(), time.Minute)
 	acc := store.Account{
 		ID: uuid.New(), Vendor: "codex", Name: "codex-goodtek", AuthType: "oauth",
 		InfisicalPath: path, BaseURL: srv.URL,
@@ -116,7 +117,7 @@ func TestCodexOAuthFetchesLiveModels(t *testing.T) {
 	}
 }
 
-func TestCodexOAuthFallsBackWhenUpstreamFails(t *testing.T) {
+func TestCodexOAuthRejectsFailedDiscovery(t *testing.T) {
 	sec := memory.New()
 	path := "/llms/p/accounts/codex/a"
 	_ = sec.Put(context.Background(), path, "credential", `{"access_token":"tok","chatgpt_account_id":"acc"}`)
@@ -126,20 +127,20 @@ func TestCodexOAuthFallsBackWhenUpstreamFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	d := modelcatalog.New(sec, srv.Client(), time.Minute)
+	d := modelcatalog.New(&proxy.Engine{Secrets: sec}, srv.Client(), time.Minute)
 	acc := store.Account{
 		ID: uuid.New(), Vendor: "codex", Name: "codex-goodtek", AuthType: "oauth",
 		InfisicalPath: path, BaseURL: srv.URL,
 	}
 	rt := &store.Route{Slug: "r", Strategy: "sequential"}
 	cat := d.ForRoute(context.Background(), rt, []store.Account{acc})
-	if cat.Accounts[0].Status != "ok" {
+	if cat.Accounts[0].Status != "error" {
 		t.Fatalf("status=%s err=%s", cat.Accounts[0].Status, cat.Accounts[0].Error)
 	}
-	if cat.Accounts[0].Error != "upstream_unavailable_using_known_list:upstream_401" {
+	if cat.Accounts[0].Error != "upstream_401" {
 		t.Fatalf("error note=%q", cat.Accounts[0].Error)
 	}
-	if cat.SuggestedModel != "gpt-5.5" {
+	if cat.SuggestedModel != "" || len(cat.Models) != 0 {
 		t.Fatalf("suggested=%q", cat.SuggestedModel)
 	}
 }
@@ -179,7 +180,7 @@ func TestCodexOAuthRefreshesOn401ThenSucceeds(t *testing.T) {
 	vendorauth.CodexTokenURL = tokenSrv.URL
 	t.Cleanup(func() { vendorauth.CodexTokenURL = prev })
 
-	d := modelcatalog.New(sec, modelsSrv.Client(), time.Minute)
+	d := modelcatalog.New(&proxy.Engine{Secrets: sec}, modelsSrv.Client(), time.Minute)
 	acc := store.Account{
 		ID: uuid.New(), Vendor: "codex", Name: "codex-goodtek", AuthType: "oauth",
 		InfisicalPath: path, BaseURL: modelsSrv.URL,
@@ -211,7 +212,7 @@ func TestParseCodexModelsJSON(t *testing.T) {
 func TestDiscoveryErrorNoAccountAsModel(t *testing.T) {
 	sec := memory.New()
 	// no secret put → error, no fallback for deepseek
-	d := modelcatalog.New(sec, http.DefaultClient, time.Minute)
+	d := modelcatalog.New(&proxy.Engine{Secrets: sec}, http.DefaultClient, time.Minute)
 	acc := store.Account{
 		ID: uuid.New(), Vendor: "deepseek", Name: "x", AuthType: "api_key",
 		InfisicalPath: "/missing", BaseURL: "http://127.0.0.1:1",
