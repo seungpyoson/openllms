@@ -705,13 +705,9 @@ func (s *Store) EarliestRouteCooldown(ctx context.Context, routeID uuid.UUID) (u
 	defer rows.Close()
 	now := time.Now()
 	for rows.Next() {
-		var raw any
-		if err := rows.Scan(&raw); err != nil {
+		var t time.Time
+		if err := rows.Scan(&t); err != nil {
 			return time.Time{}, false, err
-		}
-		t, perr := coerceTime(raw)
-		if perr != nil {
-			return time.Time{}, false, perr
 		}
 		if t.After(now) && (!ok || t.Before(until)) {
 			until = t
@@ -719,40 +715,6 @@ func (s *Store) EarliestRouteCooldown(ctx context.Context, routeID uuid.UUID) (u
 		}
 	}
 	return until, ok, rows.Err()
-}
-
-func coerceTime(raw any) (time.Time, error) {
-	switch v := raw.(type) {
-	case time.Time:
-		return v, nil
-	case *time.Time:
-		if v == nil {
-			return time.Time{}, fmt.Errorf("nil time")
-		}
-		return *v, nil
-	case string:
-		return parseFlexibleTime(v)
-	case []byte:
-		return parseFlexibleTime(string(v))
-	default:
-		return time.Time{}, fmt.Errorf("unsupported time type %T", raw)
-	}
-}
-
-func parseFlexibleTime(s string) (time.Time, error) {
-	for _, layout := range []string{
-		time.RFC3339Nano,
-		time.RFC3339,
-		"2006-01-02 15:04:05.999999999-07:00",
-		"2006-01-02 15:04:05.999999999 +0000 UTC",
-		"2006-01-02 15:04:05.999999999 -0700 MST",
-		"2006-01-02 15:04:05",
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
 }
 
 func (s *Store) MarkAccountHealthy(ctx context.Context, accountID uuid.UUID) error {
@@ -1073,7 +1035,6 @@ func (s *Store) RefreshQuotasFromUsage(ctx context.Context) (int, error) {
 	return int(tag.RowsAffected()), nil
 }
 
-
 func (s *Store) RefreshQuotasFromUsageForProject(ctx context.Context, projectID uuid.UUID) (int, error) {
 	now := time.Now().UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -1104,7 +1065,6 @@ func (s *Store) RefreshQuotasFromUsageForProject(ctx context.Context, projectID 
 	}
 	return int(tag.RowsAffected()), nil
 }
-
 
 func (s *Store) ListOAuthAccounts(ctx context.Context) ([]Account, error) {
 	rows, err := s.db.Query(ctx, `
@@ -1169,7 +1129,6 @@ func (s *Store) SetAccountQuotaID(ctx context.Context, accountID uuid.UUID, rema
 	}
 	return nil
 }
-
 
 // SetAccountQuotaWindowsID persists tightest mirror + dual 5h/7d windows.
 func (s *Store) SetAccountQuotaWindowsID(ctx context.Context, accountID uuid.UUID, remainingPct *float64, resetAt *time.Time, rem5h *float64, reset5h *time.Time, rem7d *float64, reset7d *time.Time) error {

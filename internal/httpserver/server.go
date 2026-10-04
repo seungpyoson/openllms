@@ -671,7 +671,11 @@ func (s *Server) handleListRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(list))
 	for _, rt := range list {
-		accs, _ := s.store.ListRouteAccounts(r.Context(), rt.ID)
+		accs, err := s.store.ListRouteAccounts(r.Context(), rt.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
 		ids := make([]string, 0, len(accs))
 		refs := make([]string, 0, len(accs))
 		for _, a := range accs {

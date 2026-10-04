@@ -231,9 +231,23 @@ func (f *flexibleTime) assign(t time.Time, null bool) error {
 	}
 }
 
+// modernc's default binder writes time.Time.String(), including an optional
+// process-local monotonic suffix. Accept those existing TEXT values without
+// treating an arbitrary trailing string as valid timestamp data.
+var sqliteMonotonicSuffix = regexp.MustCompile(` m=[+-][0-9]+\.[0-9]{9}$`)
+
 func parseSQLiteTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
+	}
+	legacy := sqliteMonotonicSuffix.ReplaceAllString(s, "")
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700 -0700", // unnamed fixed zone
+	} {
+		if t, err := time.Parse(layout, legacy); err == nil {
+			return t, true
+		}
 	}
 	layouts := []string{
 		time.RFC3339Nano,
@@ -244,12 +258,9 @@ func parseSQLiteTime(s string) (time.Time, bool) {
 		"2006-01-02T15:04:05",
 		"2006-01-02",
 	}
+	// time.Parse treats timezone-free CURRENT_TIMESTAMP values as UTC.
 	for _, layout := range layouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
-		}
-		// CURRENT_TIMESTAMP is UTC-naive; treat as UTC.
-		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
 			return t, true
 		}
 	}
