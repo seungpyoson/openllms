@@ -3,10 +3,14 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/goodtekxyz/openllms/internal/store"
 )
 
 func TestRouteListingRejectsUnreadableQuota(t *testing.T) {
@@ -58,5 +62,30 @@ func TestRouteListingRejectsUnreadableQuota(t *testing.T) {
 	}
 	if w := get("/control/v1/routes"); w.Code != http.StatusInternalServerError {
 		t.Fatalf("unreadable quota status=%d, want 500; body=%s", w.Code, w.Body.String())
+	}
+}
+
+type routePoolReadFailure struct {
+	store.DB
+	failure error
+}
+
+func (d routePoolReadFailure) Query(ctx context.Context, query string, args ...any) (store.Rows, error) {
+	if strings.Contains(query, "JOIN accounts a ON a.id = ra.account_id") {
+		return nil, d.failure
+	}
+	return d.DB.Query(ctx, query, args...)
+}
+
+func TestConsoleRejectsRoutePoolReadFailure(t *testing.T) {
+	f := newAccountFixture(t)
+	if _, err := f.st.CreateRoute(context.Background(), f.project, "broken", "sequential", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("synthetic route pool read failure")
+	f.srv.store = store.NewDB(routePoolReadFailure{store.NewSQLiteDB(f.db), want}, store.DefaultAuthCacheTTL, store.DefaultRouteCacheTTL)
+	payload, err := f.srv.consoleOverviewPayload(context.Background(), f.project)
+	if !errors.Is(err, want) || payload != nil {
+		t.Fatalf("read failure hidden: payload=%v err=%v", payload, err)
 	}
 }

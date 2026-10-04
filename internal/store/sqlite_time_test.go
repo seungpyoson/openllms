@@ -39,6 +39,8 @@ func TestSQLiteTimeDriverRoundTrip(t *testing.T) {
 		time.Date(2026, 10, 9, 21, 13, 25, 0, time.UTC),
 		time.Date(2026, 10, 9, 21, 13, 25, 123456789, time.FixedZone("KST", 9*3600)),
 		time.Date(2026, 10, 9, 21, 13, 25, 500, time.FixedZone("", -5*3600-1800)),
+		time.Date(2026, 10, 9, 21, 13, 25, 0, time.FixedZone("-03", -3*3600)),
+		time.Date(2026, 10, 9, 21, 13, 25, 0, time.FixedZone("+0545", 5*3600+45*60)),
 		time.Now(),
 	}
 	for _, want := range values {
@@ -75,8 +77,8 @@ func TestSQLiteTimeDriverRoundTrip(t *testing.T) {
 func TestSQLiteTimeNullAndInvalid(t *testing.T) {
 	adapter := store.NewSQLiteDB(sqliteTimeDB(t))
 	ctx := context.Background()
-	var nullable *time.Time
 	value := time.Now()
+	nullable := &value
 	if err := adapter.QueryRow(ctx, `SELECT NULL, NULL`).Scan(&nullable, &value); err != nil {
 		t.Fatal(err)
 	}
@@ -143,5 +145,65 @@ func TestSQLiteProviderQuotaKeepsAccountReadable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSQLiteCooldownComparesInstants(t *testing.T) {
+	database := sqliteTimeDB(t)
+	st := store.NewSQLite(database)
+	ctx := context.Background()
+	project, _, err := st.Bootstrap(ctx, "cooldown", "cooldown", "cooldown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := st.CreateAccount(ctx, project, "codex", "seat", "oauth", "/synthetic", "https://unused.invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := st.CreateRoute(ctx, project, "cooldown", "sequential", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AttachAccount(ctx, route.ID, account.ID, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"driver", "rfc3339"} {
+		for _, tc := range []struct {
+			name    string
+			offset  int
+			delta   time.Duration
+			cooling bool
+		}{
+			{"expired_east", 9 * 3600, -time.Minute, false},
+			{"future_west", -5 * 3600, time.Minute, true},
+		} {
+			t.Run(format+"/"+tc.name, func(t *testing.T) {
+				until := time.Now().UTC().Add(tc.delta).In(time.FixedZone("SYN", tc.offset))
+				var stored any = until
+				if format == "rfc3339" {
+					stored = until.Format(time.RFC3339Nano)
+				}
+				// Seed existing representations directly: a new write policy cannot
+				// repair incorrect filtering of rows already on disk.
+				if _, err := database.Exec(`UPDATE accounts SET cooldown_until = ? WHERE id = ?`, stored, account.ID.String()); err != nil {
+					t.Fatal(err)
+				}
+				usable, err := st.ListRouteAccounts(ctx, route.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, cooling, err := st.EarliestRouteCooldown(ctx, route.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantUsable := 1
+				if tc.cooling {
+					wantUsable = 0
+				}
+				if len(usable) != wantUsable || cooling != tc.cooling || (cooling && !got.Equal(until)) {
+					t.Fatalf("usable=%d cooling=%v until=%v; want usable=%d cooling=%v until=%v", len(usable), cooling, got, wantUsable, tc.cooling, until)
+				}
+			})
+		}
 	}
 }

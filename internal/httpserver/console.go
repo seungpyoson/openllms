@@ -90,7 +90,10 @@ func (s *Server) consoleOverviewPayload(ctx context.Context, projectID uuid.UUID
 	}
 	rtOut := make([]map[string]any, 0, len(routes))
 	for _, rt := range routes {
-		mem, _ := s.store.ListRoutePool(ctx, rt.ID)
+		mem, err := s.store.ListRoutePool(ctx, rt.ID)
+		if err != nil {
+			return nil, err
+		}
 		memIDs := make([]string, 0, len(mem))
 		memRefs := make([]string, 0, len(mem))
 		for _, m := range mem {

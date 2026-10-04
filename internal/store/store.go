@@ -584,11 +584,10 @@ func (s *Store) AttachAccount(ctx context.Context, routeID, accountID uuid.UUID,
 func (s *Store) ListRouteAccounts(ctx context.Context, routeID uuid.UUID) ([]Account, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT a.id, a.project_id, a.vendor, a.name, a.auth_type, a.infisical_path, a.base_url, a.health, a.default_model,
-		       ra.weight, ra.position, a.quota_remaining_pct, a.quota_reset_at, a.quota_updated_at, a.quota_5h_remaining_pct, a.quota_5h_reset_at, a.quota_7d_remaining_pct, a.quota_7d_reset_at
+		       ra.weight, ra.position, a.quota_remaining_pct, a.quota_reset_at, a.quota_updated_at, a.quota_5h_remaining_pct, a.quota_5h_reset_at, a.quota_7d_remaining_pct, a.quota_7d_reset_at, a.cooldown_until
 		FROM route_accounts ra
 		JOIN accounts a ON a.id = ra.account_id
 		WHERE ra.route_id = $1
-		  AND (a.cooldown_until IS NULL OR a.cooldown_until < now())
 		ORDER BY ra.position ASC, a.created_at ASC
 	`, routeID)
 	if err != nil {
@@ -596,10 +595,17 @@ func (s *Store) ListRouteAccounts(ctx context.Context, routeID uuid.UUID) ([]Acc
 	}
 	defer rows.Close()
 	var out []Account
+	now := time.Now()
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Vendor, &a.Name, &a.AuthType, &a.InfisicalPath, &a.BaseURL, &a.Health, &a.DefaultModel, &a.Weight, &a.Position, &a.QuotaRemainingPct, &a.QuotaResetAt, &a.QuotaUpdatedAt, &a.Quota5hRemainingPct, &a.Quota5hResetAt, &a.Quota7dRemainingPct, &a.Quota7dResetAt); err != nil {
+		var cooldownUntil *time.Time
+		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Vendor, &a.Name, &a.AuthType, &a.InfisicalPath, &a.BaseURL, &a.Health, &a.DefaultModel, &a.Weight, &a.Position, &a.QuotaRemainingPct, &a.QuotaResetAt, &a.QuotaUpdatedAt, &a.Quota5hRemainingPct, &a.Quota5hResetAt, &a.Quota7dRemainingPct, &a.Quota7dResetAt, &cooldownUntil); err != nil {
 			return nil, err
+		}
+		// Compare instants after decoding: SQLite TEXT may contain an existing
+		// local-zone driver timestamp, which cannot sort against UTC now().
+		if cooldownUntil != nil && cooldownUntil.After(now) {
+			continue
 		}
 		out = append(out, a)
 	}
@@ -697,7 +703,6 @@ func (s *Store) EarliestRouteCooldown(ctx context.Context, routeID uuid.UUID) (u
 		JOIN accounts a ON a.id = ra.account_id
 		WHERE ra.route_id = $1
 		  AND a.cooldown_until IS NOT NULL
-		  AND a.cooldown_until > now()
 	`, routeID)
 	if err != nil {
 		return time.Time{}, false, err

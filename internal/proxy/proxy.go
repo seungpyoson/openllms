@@ -480,7 +480,11 @@ func (e *Engine) emptyAccountsResult(ctx context.Context, rt *store.Route, filte
 	}
 
 	retryAfter := 30
-	if until, ok, err := e.Store.EarliestRouteCooldown(ctx, rt.ID); err == nil && ok {
+	until, ok, err := e.Store.EarliestRouteCooldown(ctx, rt.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		sec := int(time.Until(until).Seconds() + 0.999)
 		if sec < 1 {
 			sec = 1
